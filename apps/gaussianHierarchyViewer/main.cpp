@@ -21,12 +21,90 @@
 #include <core/raycaster/Raycaster.hpp>
 #include <core/view/SceneDebugView.hpp>
 
+#include <asio.hpp>
+#include <nlohmann/json.hpp>
+#include <atomic>
+
 #define PROGRAM_NAME "sibr_3Dhierarchy"
 using namespace sibr;
 
 const char* usage = ""
 "Usage: " PROGRAM_NAME " -path <dataset-path>"    	                                "\n"
 ;
+
+using asio::ip::tcp;
+using json = nlohmann::json;
+
+// Struct to hold camera transform data
+struct CameraTransform {
+	sibr::Vector3f translation;
+	sibr::Quaternionf rotation;
+};
+
+// Shared variable to store camera transform
+std::shared_ptr<CameraTransform> cameraTransform = nullptr;
+std::mutex cameraTransformMutex;
+
+std::atomic<bool> _running {false};
+std::atomic<bool> _newData {false};
+
+// Function to update the camera transform
+void updateCameraTransform(const sibr::Vector3f& translation, const sibr::Quaternionf& rotation) {
+	std::lock_guard<std::mutex> lock(cameraTransformMutex);
+	if (!cameraTransform) {
+		cameraTransform = std::make_shared<CameraTransform>();
+	}
+	cameraTransform->translation = translation;
+	cameraTransform->rotation = rotation;
+}
+
+// TCP Server function
+void runTCPServer(std::atomic<bool>& _running) {
+    try {
+        asio::io_context io_context;
+        tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 4444));
+
+        std::cout << "TCP Server started. Waiting for connections..." << std::endl;
+
+        while (_running) {
+            tcp::socket socket(io_context);
+            acceptor.accept(socket);
+
+            std::cout << "Client connected!" << std::endl;
+
+            char data[1024];
+            asio::error_code error;
+            size_t length = socket.read_some(asio::buffer(data), error);
+
+            if (!error) {
+                std::string jsonStr(data, length);
+                std::cout << "Received JSON: " << jsonStr << std::endl;
+
+                // Parse JSON
+                json jsonData = json::parse(jsonStr);
+                sibr::Vector3f translation(
+                    jsonData["translation"]["x"],
+                    jsonData["translation"]["y"],
+                    jsonData["translation"]["z"]
+                );
+                sibr::Quaternionf rotation(
+                    jsonData["rotation"]["w"],
+                    jsonData["rotation"]["x"],
+                    jsonData["rotation"]["y"],
+                    jsonData["rotation"]["z"]
+                );
+
+				// Update the camera transform
+				updateCameraTransform(translation, rotation);
+				_newData = true;
+            } else {
+                std::cerr << "Error receiving data: " << error.message() << std::endl;
+            }
+        }
+    } catch (std::exception& e) {
+        std::cerr << "TCP Server error: " << e.what() << std::endl;
+    }
+}
 
 int main(int ac, char** av) {
 
@@ -47,6 +125,16 @@ int main(int ac, char** av) {
 
 	const char* toload = myArgs.modelPath.get().c_str();
 	const char* scaffold = myArgs.scaffoldPath.get().c_str();
+
+	bool tcpEnabled = myArgs.tcpEnabled;
+    std::thread tcpServerThread;
+
+    if (tcpEnabled) {
+        std::cout << "TCP Enabled! Starting TCP server..." << std::endl;
+        
+		_running = true;
+		tcpServerThread = std::thread(runTCPServer, std::ref(_running));
+    }
 
 	// Window setup
 	sibr::Window		window(PROGRAM_NAME, sibr::Vector2i(50, 50), myArgs, getResourcesDirectory() + "/hierarchy/" + PROGRAM_NAME + ".ini");
@@ -134,13 +222,31 @@ int main(int ac, char** av) {
 		if (sibr::Input::global().key().isPressed(sibr::Key::Escape)) {
 			window.close();
 		}
+		
+		sibr::Input& input = sibr::Input::global();
 
-		multiViewManager.onUpdate(sibr::Input::global());
+		// Check if cameraTransform is available and update the camera
+		if (_newData) {
+			_newData =  false;
+			std::lock_guard<std::mutex> lock(cameraTransformMutex);
+			if (cameraTransform) {
+				generalCamera->switchMode(sibr::InteractiveCameraHandler::TCP);
+				generalCamera->updateCameraTransform(cameraTransform->translation, cameraTransform->rotation);
+			}
+		}
+
+		multiViewManager.onUpdate(input);
 		multiViewManager.onRender(window);
 
 		window.swapBuffer();
 		CHECK_GL_ERROR;
 	}
+
+	// Clean up
+    if (tcpEnabled) {
+        _running = false; // Stop the TCP server
+        tcpServerThread.join(); // Wait for the TCP server thread to finish
+    }
 
 	return EXIT_SUCCESS;
 }

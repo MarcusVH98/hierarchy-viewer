@@ -55,6 +55,7 @@ namespace sibr {
 		Arg<bool> poisson = { "poisson-blend", "apply Poisson-filling to the ULR result" };
 		Arg<int> budget = { "budget", 16000, "Hierarchy memory budget (MB)" };
 		Arg<std::string> imagesPath = { "images-path", "", "path to images" };
+		Arg<bool> tcpEnabled = {"tcpEnabled", "Enable camera controls on tcp socket 4444"};
 	};
 
 }
