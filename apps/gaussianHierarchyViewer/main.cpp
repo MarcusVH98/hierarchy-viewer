@@ -37,7 +37,7 @@ using json = nlohmann::json;
 
 // Struct to hold camera transform data
 struct CameraTransform {
-	sibr::Vector3f translation;
+	sibr::Vector3f position;
 	sibr::Quaternionf rotation;
 };
 
@@ -48,13 +48,23 @@ std::mutex cameraTransformMutex;
 std::atomic<bool> _running {false};
 std::atomic<bool> _newData {false};
 
-// Function to update the camera transform
-void updateCameraTransform(const sibr::Vector3f& translation, const sibr::Quaternionf& rotation) {
+// Function to update the absolute camera transform
+void updateCameraTransform(const sibr::Vector3f& transform, const sibr::Quaternionf& rotation) {
 	std::lock_guard<std::mutex> lock(cameraTransformMutex);
 	if (!cameraTransform) {
 		cameraTransform = std::make_shared<CameraTransform>();
 	}
-	cameraTransform->translation = translation;
+	cameraTransform->position = transform;
+	cameraTransform->rotation = rotation;
+}
+
+// Function to translate the camera transform
+void translateCamera(const sibr::Vector3f& translation, const sibr::Quaternionf& rotation) {
+	std::lock_guard<std::mutex> lock(cameraTransformMutex);
+	if (!cameraTransform) {
+		cameraTransform = std::make_shared<CameraTransform>();
+	}
+	cameraTransform->position += translation;
 	cameraTransform->rotation = rotation;
 }
 
@@ -82,20 +92,38 @@ void runTCPServer(std::atomic<bool>& _running) {
 
                 // Parse JSON
                 json jsonData = json::parse(jsonStr);
-                sibr::Vector3f translation(
-                    jsonData["translation"]["x"],
-                    jsonData["translation"]["y"],
-                    jsonData["translation"]["z"]
-                );
-                sibr::Quaternionf rotation(
-                    jsonData["rotation"]["w"],
-                    jsonData["rotation"]["x"],
-                    jsonData["rotation"]["y"],
-                    jsonData["rotation"]["z"]
-                );
+                if (jsonData.contains("position")) {
+					// Absolute position update
+					sibr::Vector3f position(
+						jsonData["position"]["x"],
+						jsonData["position"]["y"],
+						jsonData["position"]["z"]
+					);
+					sibr::Quaternionf rotation(
+						jsonData["rotation"]["w"],
+						jsonData["rotation"]["x"],
+						jsonData["rotation"]["y"],
+						jsonData["rotation"]["z"]
+					);
 
-				// Update the camera transform
-				updateCameraTransform(translation, rotation);
+					updateCameraTransform(position, rotation);
+				} 
+				else if (jsonData.contains("translation")) {
+					// Relative translation update
+					sibr::Vector3f translation(
+						jsonData["translation"]["x"],
+						jsonData["translation"]["y"],
+						jsonData["translation"]["z"]
+					);
+					sibr::Quaternionf rotation(
+						jsonData["rotation"]["w"],
+						jsonData["rotation"]["x"],
+						jsonData["rotation"]["y"],
+						jsonData["rotation"]["z"]
+					);
+
+					translateCamera(translation, rotation);
+				}
 				_newData = true;
             } else {
                 std::cerr << "Error receiving data: " << error.message() << std::endl;
@@ -231,7 +259,7 @@ int main(int ac, char** av) {
 			std::lock_guard<std::mutex> lock(cameraTransformMutex);
 			if (cameraTransform) {
 				generalCamera->switchMode(sibr::InteractiveCameraHandler::TCP);
-				generalCamera->updateCameraTransform(cameraTransform->translation, cameraTransform->rotation);
+				generalCamera->updateCameraTransform(cameraTransform->position, cameraTransform->rotation);
 			}
 		}
 
