@@ -50,6 +50,7 @@ std::atomic<bool> _newData {false};
 
 // Function to update the absolute camera transform
 void updateCameraTransform(const sibr::Vector3f& transform, const sibr::Quaternionf& rotation) {
+	std::cout << "in updateCameraTransform" << std::endl;
 	std::lock_guard<std::mutex> lock(cameraTransformMutex);
 	if (!cameraTransform) {
 		cameraTransform = std::make_shared<CameraTransform>();
@@ -60,6 +61,7 @@ void updateCameraTransform(const sibr::Vector3f& transform, const sibr::Quaterni
 
 // Function to translate the camera transform
 void translateCamera(const sibr::Vector3f& translation, const sibr::Quaternionf& rotation) {
+	std::cout << "in translateCamera" << std::endl;
 	std::lock_guard<std::mutex> lock(cameraTransformMutex);
 	if (!cameraTransform) {
 		cameraTransform = std::make_shared<CameraTransform>();
@@ -155,14 +157,6 @@ int main(int ac, char** av) {
 	const char* scaffold = myArgs.scaffoldPath.get().c_str();
 
 	bool tcpEnabled = myArgs.tcpEnabled;
-    std::thread tcpServerThread;
-
-    if (tcpEnabled) {
-        std::cout << "TCP Enabled! Starting TCP server..." << std::endl;
-        
-		_running = true;
-		tcpServerThread = std::thread(runTCPServer, std::ref(_running));
-    }
 
 	// Window setup
 	sibr::Window		window(PROGRAM_NAME, sibr::Vector2i(50, 50), myArgs, getResourcesDirectory() + "/hierarchy/" + PROGRAM_NAME + ".ini");
@@ -242,6 +236,18 @@ int main(int ac, char** av) {
 			exit(0);
 	}
 
+	// Start TCP server
+	std::thread tcpServerThread;
+    if (tcpEnabled) {
+        std::cout << "TCP Enabled! Starting TCP server..." << std::endl;
+        
+		_running = true;
+		tcpServerThread = std::thread(runTCPServer, std::ref(_running));
+
+		// Enable TCP camera mode
+		generalCamera->switchMode(sibr::InteractiveCameraHandler::TCP);
+    }
+
 	// Main looooooop.
 	while (window.isOpened()) {
 
@@ -257,12 +263,9 @@ int main(int ac, char** av) {
 		if (_newData) {
 			_newData =  false;
 			std::lock_guard<std::mutex> lock(cameraTransformMutex);
-			if (cameraTransform) {
-				generalCamera->switchMode(sibr::InteractiveCameraHandler::TCP);
-				generalCamera->updateCameraTransform(cameraTransform->position, cameraTransform->rotation);
-			}
+			generalCamera->updateCameraTransform(cameraTransform->position, cameraTransform->rotation);
 		}
-
+		
 		multiViewManager.onUpdate(input);
 		multiViewManager.onRender(window);
 
