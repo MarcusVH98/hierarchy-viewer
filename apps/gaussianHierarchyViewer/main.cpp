@@ -32,7 +32,7 @@ const char* usage = ""
 "Usage: " PROGRAM_NAME " -path <dataset-path>"    	                                "\n"
 ;
 
-using asio::ip::tcp;
+using asio::ip::udp;
 using json = nlohmann::json;
 
 // Struct to hold camera transform data
@@ -70,69 +70,49 @@ void translateCamera(const sibr::Vector3f& translation, const sibr::Quaternionf&
 	cameraTransform->rotation = rotation;
 }
 
-// TCP Server function
-void runTCPServer(std::atomic<bool>& _running) {
+void runUDPServer(std::atomic<bool>& _running) {
     try {
         asio::io_context io_context;
-        tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 4444));
+        udp::socket socket(io_context, udp::endpoint(udp::v4(), 4444));
 
-        std::cout << "TCP Server started. Waiting for connections..." << std::endl;
+        std::cout << "UDP Server started. Waiting for messages..." << std::endl;
+
+        char data[1024];
+        udp::endpoint sender_endpoint;
 
         while (_running) {
-            tcp::socket socket(io_context);
-            acceptor.accept(socket);
-
-            std::cout << "Client connected!" << std::endl;
-
-            char data[1024];
             asio::error_code error;
-            size_t length = socket.read_some(asio::buffer(data), error);
+            size_t length = socket.receive_from(asio::buffer(data), sender_endpoint, 0, error);
 
-            if (!error) {
+            if (!error && length > 0) {
                 std::string jsonStr(data, length);
                 std::cout << "Received JSON: " << jsonStr << std::endl;
 
                 // Parse JSON
                 json jsonData = json::parse(jsonStr);
-                if (jsonData.contains("position")) {
-					// Absolute position update
-					sibr::Vector3f position(
-						jsonData["position"]["x"],
-						jsonData["position"]["y"],
-						jsonData["position"]["z"]
-					);
-					sibr::Quaternionf rotation(
-						jsonData["rotation"]["w"],
-						jsonData["rotation"]["x"],
-						jsonData["rotation"]["y"],
-						jsonData["rotation"]["z"]
-					);
 
-					updateCameraTransform(position, rotation);
-				} 
-				else if (jsonData.contains("translation")) {
-					// Relative translation update
-					sibr::Vector3f translation(
-						jsonData["translation"]["x"],
-						jsonData["translation"]["y"],
-						jsonData["translation"]["z"]
-					);
-					sibr::Quaternionf rotation(
-						jsonData["rotation"]["w"],
-						jsonData["rotation"]["x"],
-						jsonData["rotation"]["y"],
-						jsonData["rotation"]["z"]
-					);
+                // Absolute position update
+                sibr::Vector3f position(
+                    jsonData["position"]["x"],
+                    jsonData["position"]["y"],
+                    jsonData["position"]["z"]
+                );
+                sibr::Quaternionf rotation(
+                    jsonData["rotation"]["w"],
+                    jsonData["rotation"]["x"],
+                    jsonData["rotation"]["y"],
+                    jsonData["rotation"]["z"]
+                );
 
-					translateCamera(translation, rotation);
-				}
-				_newData = true;
-            } else {
+                updateCameraTransform(position, rotation);
+
+                _newData = true;
+            } else if (error) {
                 std::cerr << "Error receiving data: " << error.message() << std::endl;
             }
         }
     } catch (std::exception& e) {
-        std::cerr << "TCP Server error: " << e.what() << std::endl;
+        std::cerr << "UDP Server error: " << e.what() << std::endl;
     }
 }
 
@@ -156,7 +136,7 @@ int main(int ac, char** av) {
 	const char* toload = myArgs.modelPath.get().c_str();
 	const char* scaffold = myArgs.scaffoldPath.get().c_str();
 
-	bool tcpEnabled = myArgs.tcpEnabled;
+	bool udpEnabled = myArgs.tcpEnabled;
 
 	// Window setup
 	sibr::Window		window(PROGRAM_NAME, sibr::Vector2i(50, 50), myArgs, getResourcesDirectory() + "/hierarchy/" + PROGRAM_NAME + ".ini");
@@ -236,16 +216,16 @@ int main(int ac, char** av) {
 			exit(0);
 	}
 
-	// Start TCP server
-	std::thread tcpServerThread;
-    if (tcpEnabled) {
-        std::cout << "TCP Enabled! Starting TCP server..." << std::endl;
+	// Start UDP server
+	std::thread udpServerThread;
+    if (udpEnabled) {
+        std::cout << "UDP Enabled! Starting UDP server..." << std::endl;
         
 		_running = true;
-		tcpServerThread = std::thread(runTCPServer, std::ref(_running));
+		udpServerThread = std::thread(runUDPServer, std::ref(_running));
 
-		// Enable TCP camera mode
-		generalCamera->switchMode(sibr::InteractiveCameraHandler::TCP);
+		// Enable JSON camera mode
+		generalCamera->switchMode(sibr::InteractiveCameraHandler::JSON);
     }
 
 	// Main looooooop.
@@ -274,9 +254,9 @@ int main(int ac, char** av) {
 	}
 
 	// Clean up
-    if (tcpEnabled) {
-        _running = false; // Stop the TCP server
-        tcpServerThread.join(); // Wait for the TCP server thread to finish
+    if (udpEnabled) {
+        _running = false; // Stop the UDP server
+        udpServerThread.join(); // Wait for the UDP server thread to finish
     }
 
 	return EXIT_SUCCESS;
